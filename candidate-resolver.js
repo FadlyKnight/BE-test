@@ -1,4 +1,8 @@
+
+const listPaymentMethod = Array(['credit_card', 'sepa', 'transfer', 'check', 'bank'])
 // utils
+
+
 async function logIban(_id, $set) {
     await IbanHistoryModel.updateOne({ _id }, { $set });
 }
@@ -33,6 +37,19 @@ async function createIbanHisttoryAndValidate (_id, payload) {
     }
 }
 
+async function parseCandidateIds(oldCandidate){
+    const candidateFound = await CandidateModel.findById(oldCandidate._id).select('student_id').lean();
+    const otherCandidateSameStudent = await CandidateModel.find({ student_id: candidateFound.student_id }).select('_id').lean();
+
+    let candidateIds = [];
+    if (otherCandidateSameStudent.length === 0) {
+        candidateIds.push(oldCandidate._id);
+    } else {
+        otherCandidateSameStudent.map((candidateId) => candidateIds.push(candidateId._id));
+    }
+    return candidateIds;
+}
+
 async function updateStudentsResignStatus(candidateIds, status) {
     await CandidateModel.updateMany(
     { _id: { $in: candidateIds }, readmission_status: 'assignment_table' },
@@ -44,20 +61,27 @@ async function updateStudentsResignStatus(candidateIds, status) {
     );
 }
 
-function checkCandidateStatus(candidate_input, oldCandidate) {
-    if (oldCandidate.candidate_admission_status === 'registered') {
-        const list_candidate_admission_status = [
-            'resigned',
-            'resigned_after_engaged',
-            'resigned_after_registered',
-            'no_show',
-            'resignation_missing_prerequisites',
-            'resign_after_school_begins',
-            'report_inscription'
-        ];
-        return list_candidate_admission_status.includes(candidate_input.candidate_admission_status)
+function checkCandidateStatus(candidate_input, old_candidate, is_for_resign) {
+    const list_status = [
+        'resigned',
+        'resigned_after_engaged',
+        'resigned_after_registered',
+        'no_show',
+        'resignation_missing_prerequisites',
+        'resign_after_school_begins',
+        'report_inscription'
+    ];
+    if (is_for_resign) {       
+        if (old_candidate.candidate_admission_status === 'registered') {
+            return list_status.includes(candidate_input.candidate_admission_status)
+        }
+        return false
+    } else {
+        if (candidate_input.candidate_admission_status === 'registered') {
+            return list_status.includes(old_candidate.candidate_admission_status)
+        }
+        return true
     }
-    return false
 }
 
 async function UpdateCandidate(
@@ -328,32 +352,13 @@ async function UpdateCandidate(
   }
 
   // To update candidate status, and validation on readmission assignment table
-  if (checkCandidateStatus(candidate_input, oldCandidate)) {
-    const candidateFound = await CandidateModel.findById(oldCandidate._id).select('student_id').lean();
-    const otherCandidateSameStudent = await CandidateModel.find({ student_id: candidateFound.student_id }).select('_id').lean();
-
-    let candidateIds = [];
-    if (otherCandidateSameStudent.length === 0) {
-      candidateIds.push(oldCandidate._id);
-    } else {
-      otherCandidateSameStudent.map((candidateId) => candidateIds.push(candidateId._id));
-    }
-
-    await updateStudentsResignStatus(candidateIds, true)
+    // let candidateIds = parseCandidateIds(); // not sure this correct need to know the context about resign statuses update
+  if (checkCandidateStatus(candidate_input, oldCandidate, true)) {
+    await updateStudentsResignStatus(parseCandidateIds(oldCandidate), true)
   }
 
-  if (checkCandidateStatus(candidate_input, oldCandidate)) {
-    const candidateFound = await CandidateModel.findById(oldCandidate._id).select('student_id').lean();
-    const otherCandidateSameStudent = await CandidateModel.find({ student_id: candidateFound.student_id }).select('_id').lean();
-
-    let candidateIds = [];
-    if (otherCandidateSameStudent.length === 0) {
-      candidateIds.push(oldCandidate._id);
-    } else {
-      otherCandidateSameStudent.map((candidateId) => candidateIds.push(candidateId._id));
-    }
-
-    await updateStudentsResignStatus(candidateIds, false)
+  if (checkCandidateStatus(candidate_input, oldCandidate, false)) {
+    await updateStudentsResignStatus(parseCandidateIds(oldCandidate), false)
   }
 
   // start process change step status for continuous fomation student
@@ -406,7 +411,7 @@ async function UpdateCandidate(
       (continuousTypeOfFormation.includes(typeOfFormation.type_of_formation) || oldCandidate.readmission_status === 'readmission_table') &&
       candidate_input.payment_method &&
       candidate_input.payment_method !== oldCandidate.payment_method &&
-      !['credit_card', 'sepa', 'transfer', 'check', 'bank'].includes(candidate_input.payment_method)) ||
+      !listPaymentMethod.includes(candidate_input.payment_method)) ||
     candidate_input.payment === 'no_down_payment'
   ) {
     if (admissionProcess && admissionProcess.steps && admissionProcess.steps.length) {
